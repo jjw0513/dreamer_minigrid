@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 import torch
+from envs import GymMoreRedBalls
+from gymnasium.spaces import Box, Discrete  # 필요한 공간을 임포트
+from envs.GymMoreRedBalls import GymMoreRedBalls  # GymMoreRedBalls 환경 임포트
 
 GYM_ENVS = [
     'Pendulum-v0',
@@ -15,6 +18,7 @@ GYM_ENVS = [
     'Reacher-v2',
     'Swimmer-v2',
     'Walker2d-v2',
+    'GymMoreRedBalls-v0'
 ]
 CONTROL_SUITE_ENVS = [
     'cartpole-balance',
@@ -150,28 +154,46 @@ class ControlSuiteEnv:
 
 class GymEnv:
     def __init__(self, env, symbolic, seed, max_episode_length, action_repeat, bit_depth):
-        import gym
-
+        import gymnasium as gym
+        from gymnasium.spaces import Box, Discrete  # 필요한 공간을 임포트
         self.symbolic = symbolic
-        self._env = gym.make(env)
-        self._env.seed(seed)
+        self._env = gym.make(env,render_mode="rgb_array")
+        #self._env.seed(seed)
         self.max_episode_length = max_episode_length
         self.action_repeat = action_repeat
         self.bit_depth = bit_depth
 
+        # action_space와 observation_space가 올바르게 설정되었는지 확인
+        assert isinstance(self._env.action_space, (Box, Discrete)), \
+            f"Action space does not inherit from gymnasium.spaces.Box or gymnasium.spaces.Discrete, actual type: {type(self._env.action_space)}"
+        # Dict 공간을 Box 공간으로 변환
+        if isinstance(self._env.observation_space, gym.spaces.Dict):
+            self._observation_space = Box(
+                low=0, high=255, shape=(64, 64, 3), dtype=np.uint8
+            )
+        else:
+            assert isinstance(self._env.observation_space, (Box, Discrete)), \
+                f"Observation space does not inherit from gymnasium.spaces.Box or gymnasium.spaces.Discrete, actual type: {type(self._env.observation_space)}"
+            self._observation_space = self._env.observation_space
     def reset(self):
         self.t = 0  # Reset internal timer
-        state = self._env.reset()
+        state, _ = self._env.reset()
         if self.symbolic:
             return torch.tensor(state, dtype=torch.float32).unsqueeze(dim=0)
         else:
-            return _images_to_observation(self._env.render(mode='rgb_array'), self.bit_depth)
-
+            #return _images_to_observation(self._env.render(mode='rgb_array'), self.bit_depth)
+            render_output = self._env.render()  # render 호출
+            if render_output is None or len(render_output) == 0:
+                raise ValueError("Render output is empty or None.")
+            return _images_to_observation(render_output, self.bit_depth)
     def step(self, action):
         action = action.detach().numpy()
+        if isinstance(action, np.ndarray) and action.size == 1:
+            action = action.item()  # 단일 값으로 변환
         reward = 0
         for k in range(self.action_repeat):
-            state, reward_k, done, _ = self._env.step(action)
+            state, reward_k, done, _, _ = self._env.step(action)
+            #원래는 state, reward_k, done, _
             reward += reward_k
             self.t += 1  # Increment internal timer
             done = done or self.t == self.max_episode_length
@@ -180,7 +202,10 @@ class GymEnv:
         if self.symbolic:
             observation = torch.tensor(state, dtype=torch.float32).unsqueeze(dim=0)
         else:
-            observation = _images_to_observation(self._env.render(mode='rgb_array'), self.bit_depth)
+            render_output = self._env.render()  # render 호출
+            if render_output is None or len(render_output) == 0:
+                raise ValueError("Render output is empty or None.")
+            observation = _images_to_observation(render_output, self.bit_depth)
         return observation, reward, done
 
     def render(self):
@@ -195,12 +220,17 @@ class GymEnv:
 
     @property
     def action_size(self):
-        return self._env.action_space.shape[0]
-
+        #return self._env.action_space.shape[0] if isinstance(self._env.action_space, Box) else self._env.action_space.n
+        return int(self._env.action_space.shape[0]) if isinstance(self._env.action_space, Box) else int(
+            self._env.action_space.n)
     # Sample an action randomly from a uniform distribution over all valid actions
     def sample_random_action(self):
-        return torch.from_numpy(self._env.action_space.sample())
-
+        #return torch.from_numpy(self._env.action_space.sample())
+        action = self._env.action_space.sample()
+        if isinstance(action, np.ndarray):
+            return torch.from_numpy(action)
+        else:
+            return torch.tensor(int(action))  # numpy.int64 등을 처리하기 위한 변환
 
 def Env(env, symbolic, seed, max_episode_length, action_repeat, bit_depth):
     if env in GYM_ENVS:
