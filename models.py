@@ -215,7 +215,8 @@ class ValueModel(jit.ScriptModule):
         return reward
 
 
-class ActorModel(jit.ScriptModule):
+class ActorModel(jit.ScriptModule): #정책 네트워크
+                                    #주어진 상태와 belief에 기반하여 행동의 평균과 표준편차 계산
     def __init__(
         self,
         belief_size,
@@ -234,7 +235,7 @@ class ActorModel(jit.ScriptModule):
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, hidden_size)
         self.fc4 = nn.Linear(hidden_size, hidden_size)
-        self.fc5 = nn.Linear(hidden_size, 2 * action_size)
+        self.fc5 = nn.Linear(hidden_size, 2 * action_size) #행동의 평균과 표준 편차 출력
         self.modules = [self.fc1, self.fc2, self.fc3, self.fc4, self.fc5]
 
         self._dist = dist
@@ -263,7 +264,7 @@ class ActorModel(jit.ScriptModule):
         dist = TransformedDistribution(dist, TanhBijector())
         dist = torch.distributions.Independent(dist, 1)
         dist = SampleDist(dist)
-        if det:
+        if det: #det 인자가 False이므로 확률적으로 행동을 선택
             return dist.mode()
         else:
             return dist.rsample()

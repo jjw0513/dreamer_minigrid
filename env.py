@@ -18,7 +18,10 @@ GYM_ENVS = [
     'Reacher-v2',
     'Swimmer-v2',
     'Walker2d-v2',
-    'GymMoreRedBalls-v0'
+    'GymMoreRedBalls-v0',
+    #시험용 minigrid 추가
+    'MiniGrid-MemoryS7-v0',
+    'MiniGrid-Empty-16x16-v0'
 ]
 CONTROL_SUITE_ENVS = [
     'cartpole-balance',
@@ -237,7 +240,8 @@ def Env(env, symbolic, seed, max_episode_length, action_repeat, bit_depth):
         return GymEnv(env, symbolic, seed, max_episode_length, action_repeat, bit_depth)
     elif env in CONTROL_SUITE_ENVS:
         return ControlSuiteEnv(env, symbolic, seed, max_episode_length, action_repeat, bit_depth)
-
+    elif env == 'GymMoreRedBalls-v0':  # 예시: GymMoreRedBalls라는 이름으로 환경을 추가할 경우
+        return GymMoreRedBalls(symbolic, seed, max_episode_length, action_repeat, bit_depth)
 
 # Wrapper for batching environments together
 class EnvBatcher:

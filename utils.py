@@ -62,6 +62,8 @@ def write_video(frames, title, path=''):
     writer.release()
 
 
+#잠재공간에서 상상된 경로를 생성한다.
+#state와 belief를 입력받아 정책과 transition model을 사용하여 주어진 planning horizon 동안 미래의 belief와 state를 예측한다.
 def imagine_ahead(prev_state, prev_belief, policy, transition_model, planning_horizon=12):
     '''
     imagine_ahead is the function to draw the imaginary tracjectory using the dynamics model, actor, critic.

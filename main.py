@@ -26,7 +26,7 @@ parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
 parser.add_argument(
     '--env',
     type=str,
-    default='Pendulum-v0',
+    default='GymMoreRedBalls-v0',
     choices=GYM_ENVS + CONTROL_SUITE_ENVS,
     help='Gym/Control Suite environment',
 )
@@ -263,22 +263,22 @@ free_nats = torch.full((1,), args.free_nats, device=args.device)  # Allowed devi
 print("models and planners are ready")
 
 
-def update_belief_and_act(
+def update_belief_and_act( #agent에게 만들어진 신념과 transition을 기반으로 planning을 시키는 부분
     args, env, planner, transition_model, encoder, belief, posterior_state, action, observation, explore=False
 ):
     # Infer belief over current state q(s_t|o≤t,a<t) from the history
     # print("action size: ",action.size()) torch.Size([1, 6])
-    belief, _, _, _, posterior_state, _, _ = transition_model(
+    belief, _, _, _, posterior_state, _, _ = transition_model( #주어진 관찰과 이전 action을 사용하여 => 현재 상태에 대한 belief와 사후 상태를 업데이트
         posterior_state, action.unsqueeze(dim=0), belief, encoder(observation).unsqueeze(dim=0)
     )  # Action and observation need extra time dimension
     belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(
         dim=0
     )  # Remove time dimension from belief/state
     if args.algo == "dreamer":
-        action = planner.get_action(belief, posterior_state, det=not (explore))
-    else:
+        action = planner.get_action(belief, posterior_state, det=not (explore)) #결정적/탐험적 매개변수에 따라 action 취하는게 달라짐
+    else: #그냥 planner에서 짜여진 action을 그대로 뽑음
         action = planner(belief, posterior_state)  # Get action from planner(q(s_t|o≤t,a<t), p)
-    if explore:
+    if explore: #탐험 모드 시, 가우시간 분포 추가하여 action 다양하게
         action = torch.clamp(
             Normal(action, args.action_noise).rsample(), -1, 1
         )  # Add gaussian exploration noise on top of the sampled action
@@ -304,8 +304,10 @@ if args.test:
                 torch.zeros(1, args.state_size, device=args.device),
                 torch.zeros(1, env.action_size, device=args.device),
             )
+            #args.action_repeat로 나누어 반복 횟수를 줄인다.
             pbar = tqdm(range(args.max_episode_length // args.action_repeat))
-            for t in pbar:
+            for t in pbar:                      #update_belief_and_act함수를 호출하여 현재 상태를 업데이트하고,
+                                                #다음 행동을 선택한다.
                 belief, posterior_state, action, observation, reward, done = update_belief_and_act(
                     args,
                     env,
@@ -329,20 +331,22 @@ if args.test:
 
 
 # Training (and testing)
-for episode in tqdm(
+for episode in tqdm(    #마지막으로 완료된 에피소드 요소에 +1하여 다음 에피소드부터 시작하도록/ 다음 에피소드부터 최동 에피소드까지
     range(metrics['episodes'][-1] + 1, args.episodes + 1), total=args.episodes, initial=metrics['episodes'][-1] + 1
 ):
     # Model fitting
     losses = []
+    #학습할 모델 모듈들을 결합한다
     model_modules = transition_model.modules + encoder.modules + observation_model.modules + reward_model.modules
 
     print("training loop")
-    for s in tqdm(range(args.collect_interval)):
-        # Draw sequence chunks {(o_t, a_t, r_t+1, terminal_t+1)} ~ D uniformly at random from the dataset (including terminal flags)
-        observations, actions, rewards, nonterminals = D.sample(
+    for s in tqdm(range(args.collect_interval)):    #주어진 수집 간격(collct_interval)동안 반복하면서 데이터를 수집하고 모델을 업데이트
+        #         # Draw sequence chunks {(o_t, a_t, r_t+1, terminal_t+1)} ~ D uniformly at random from the dataset (including terminal flags)
+        observations, actions, rewards, nonterminals = D.sample(    #replay buffer에서 데이터 샘플을 추출한다.
             args.batch_size, args.chunk_size
         )  # Transitions start at time t = 0
         # Create initial belief and state for time t = 0
+        #초기 신념과 초기 상태를 0으로 초기화한다.
         init_belief, init_state = torch.zeros(args.batch_size, args.belief_size, device=args.device), torch.zeros(
             args.batch_size, args.state_size, device=args.device
         )
@@ -355,7 +359,7 @@ for episode in tqdm(
             posterior_states,
             posterior_means,
             posterior_std_devs,
-        ) = transition_model(
+        ) = transition_model(   #초기 신념, 상태 업데이트=> 전이 모델
             init_state, actions[:-1], init_belief, bottle(encoder, (observations[1:],)), nonterminals[:-1]
         )
         # Calculate observation likelihood, reward likelihood and KL losses (for t = 0 only for latent overshooting); sum over final dims, average over batch and time (original implementation, though paper seems to miss 1/T scaling?)
@@ -379,12 +383,14 @@ for episode in tqdm(
             reward_loss = F.mse_loss(
                 bottle(reward_model, (beliefs, posterior_states)), rewards[:-1], reduction='none'
             ).mean(dim=(0, 1))
+
         # transition loss
+        #사전, 사후 상태 분포 간 KL 손실을 계산
         div = kl_divergence(Normal(posterior_means, posterior_std_devs), Normal(prior_means, prior_std_devs)).sum(dim=2)
         kl_loss = torch.max(div, free_nats).mean(
             dim=(0, 1)
         )  # Note that normalisation by overshooting distance and weighting by overshooting distance cancel out
-        if args.global_kl_beta != 0:
+        if args.global_kl_beta != 0: #글로벌 KL이 0이 아닌 경우, 전역 kl 손실을 추가로 계산하여 총 kl 손실에 더한다.
             kl_loss += args.global_kl_beta * kl_divergence(
                 Normal(posterior_means, posterior_std_devs), global_prior
             ).sum(dim=2).mean(dim=(0, 1))
@@ -453,13 +459,17 @@ for episode in tqdm(
                     ).mean(dim=(0, 1))
                     * (args.chunk_size - 1)
                 )  # Update reward loss (compensating for extra average over each overshooting/open loop sequence)
-        # Apply linearly ramping learning rate schedule
+
+
+
+
+       # Apply linearly ramping learning rate schedule : 초기에 더 빠르게, 나중에 느리게 핚습률 조정
         if args.learning_rate_schedule != 0:
             for group in model_optimizer.param_groups:
                 group['lr'] = min(
                     group['lr'] + args.model_learning_rate / args.model_learning_rate_schedule, args.model_learning_rate
                 )
-        model_loss = observation_loss + reward_loss + kl_loss
+        model_loss = observation_loss + reward_loss + kl_loss #손실 저의
         # Update model parameters
         model_optimizer.zero_grad()
         model_loss.backward()
@@ -467,18 +477,19 @@ for episode in tqdm(
         model_optimizer.step()
 
         # Dreamer implementation: actor loss calculation and optimization
-        with torch.no_grad():
+        with torch.no_grad():   #사후 state, belief를 그라디언트 계산하지 않고 actor 네트워크에 복사해줌
+
             actor_states = posterior_states.detach()
             actor_beliefs = beliefs.detach()
         with FreezeParameters(model_modules):
-            imagination_traj = imagine_ahead(
+            imagination_traj = imagine_ahead(   #actor 네트워크의 state, belief, model과 trainsition 모델을 통해 상상된 경로를 생성한다.
                 actor_states, actor_beliefs, actor_model, transition_model, args.planning_horizon
-            )
-        imged_beliefs, imged_prior_states, imged_prior_means, imged_prior_std_devs = imagination_traj
+            )   #imagine_ahead를 통해 미래의 잠재 상태와 belief를 예측한다.
+        imged_beliefs, imged_prior_states, imged_prior_means, imged_prior_std_devs = imagination_traj #궤적의 각 요소를 업데이트
         with FreezeParameters(model_modules + value_model.modules):
             imged_reward = bottle(reward_model, (imged_beliefs, imged_prior_states))
             value_pred = bottle(value_model, (imged_beliefs, imged_prior_states))
-        returns = lambda_return(
+        returns = lambda_return( #lambda_return : 상상된 보상과 가치 예측을 사용해 미래의 반환값(returns)을 계산
             imged_reward, value_pred, bootstrap=value_pred[-1], discount=args.discount, lambda_=args.disclam
         )
         actor_loss = -torch.mean(returns)
@@ -507,7 +518,7 @@ for episode in tqdm(
         losses.append(
             [observation_loss.item(), reward_loss.item(), kl_loss.item(), actor_loss.item(), value_loss.item()]
         )
-
+        #이쪽을 wandb로 찍기
     # Update and plot loss metrics
     losses = tuple(zip(*losses))
     metrics['observation_loss'].append(losses[0])
@@ -536,7 +547,7 @@ for episode in tqdm(
             torch.zeros(1, env.action_size, device=args.device),
         )
         pbar = tqdm(range(args.max_episode_length // args.action_repeat))
-        for t in pbar:
+        for t in pbar:  #총 에피소드 길이를 repeat수로 나눠 action 취함
             # print("step",t)
             belief, posterior_state, action, next_observation, reward, done = update_belief_and_act(
                 args,

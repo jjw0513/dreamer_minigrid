@@ -272,6 +272,7 @@ class GymMoreRedBalls(RoomGridLevel):
         if status == "success":
             terminated = True
             reward = self._reward()
+            pass
         elif status == "failure":
             terminated = True
             reward = 0
